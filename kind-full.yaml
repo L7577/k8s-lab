@@ -1,0 +1,23 @@
+# =============================================================================
+# k8s-lab Kind 集群配置文件 - 带端口映射 + 挂载
+# =============================================================================
+# 功能：
+#   - 控制平面暴露 30080 → 宿主机 8080
+#   - Worker 节点挂载宿主机目录
+# 用法: kind create cluster --config kind-full.yaml
+# =============================================================================
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: k8s-lab
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 8080
+  - role: worker
+    extraMounts:
+      - hostPath: /home/l/k8s-data
+        containerPath: /mnt/k8s-data
+  - role: worker
+  - role: worker

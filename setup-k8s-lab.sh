@@ -294,6 +294,11 @@ EOF
 test_basic_deploy() {
     header "📦 测试 1：基础部署与暴露服务"
     echo ""
+    # 预拉取镜像到宿主机，再加载到 Kind 节点（避免 Kind 容器内无法直连 Docker Hub）
+    info "预加载 nginx:alpine 镜像到集群节点..."
+    docker pull nginx:alpine 2>/dev/null || true
+    kind load docker-image nginx:alpine --name "$CLUSTER_NAME" 2>/dev/null
+    ok "镜像已加载"
 
     info "创建 deployment..."
     kubectl create deployment nginx --image=nginx:alpine --replicas=3 2>&1 | tee -a "$LOG_FILE"

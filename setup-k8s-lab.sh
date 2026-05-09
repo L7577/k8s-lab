@@ -744,7 +744,7 @@ EOF
     fi
 
     info "安装 Calico CNI..."
-    kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.27/manifests/calico.yaml 2>&1 | tee -a "$LOG_FILE" || {
+    kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.3/manifests/calico.yaml 2>&1 | tee -a "$LOG_FILE" || {
         warn "Calico 安装失败（可能需要代理）"
         kind delete cluster --name "$CALICO_CLUSTER"
         rm -f "$CALICO_CONFIG"
@@ -1039,10 +1039,11 @@ select_test() {
     echo -e "  ${BOLD}4.${NC} 💾  存储测试"
     echo -e "  ${BOLD}5.${NC} 🔧  资源限制测试"
     echo -e "  ${BOLD}6.${NC} 🔄  金丝雀发布与回滚测试"
-    echo -e "  ${BOLD}7.${NC} 🌐  网络插件替换测试（需独立集群）"
+    echo -e "  ${BOLD}7.${NC} 🌐  网络连通性测试"
+    echo -e "  ${BOLD}8.${NC} 🔌  Calico 网络插件替换测试（需独立集群）"
     echo -e "  ${BOLD}0.${NC} 🔙  返回主菜单"
     echo ""
-    echo -ne "  请选择 [0-7]: "
+    echo -ne "  请选择 [0-8]: "
     read -r TEST_CHOICE
 
     case "$TEST_CHOICE" in
@@ -1053,6 +1054,7 @@ select_test() {
         5) run_single_test resource ;;
         6) run_single_test canary ;;
         7) run_single_test network ;;
+        8) run_single_test calico ;;
         0) return ;;
         *) warn "无效选择"; sleep 1; select_test ;;
     esac
@@ -1163,7 +1165,7 @@ main() {
             echo "  --install, -i             一键安装所有依赖（需 sudo）"
             echo "  --cluster, -c [配置]      创建 Kind 集群"
             echo "  --test, -t [场景]         运行指定测试场景"
-            echo "   场景: basic, scale, self-heal, storage, resource, canary, network, all"
+            echo "   场景: basic, scale, self-heal, storage, resource, canary, network, calico, all"
             echo "  --all, -a                 一键全流程（安装→创建→测试）"
             echo "  --cleanup, -cl            清理所有资源（集群 + Docker + 工具）"
             echo "  --check, -ch              检测环境状态"

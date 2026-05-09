@@ -4,7 +4,7 @@
 # 禁用默认 CNI，预留 10.244.0.0/16 给 Calico
 # 用法:
 #   kind create cluster --config kind-calico.yaml
-#   kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.27/manifests/calico.yaml
+#   kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.3/manifests/calico.yaml
 # =============================================================================
 
 kind: Cluster

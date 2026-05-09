@@ -162,7 +162,7 @@ sudo bash setup-k8s-lab.sh
 - **2** ☸️ 创建 Kind 集群（支持指定版本）
 - **3** 🧪 运行全部功能测试
 - **4** 📋 选择单项测试
-- **5** 🚀 一键全流程（安装 → 创建 → 测试）
+- **5** 🚀 一键全流程（安装 → 创建 → 测试 → 清理）
 - **6** 🔍 环境检测
 - **7** 🧹 清理环境
 
@@ -188,6 +188,7 @@ sudo bash setup-k8s-lab.sh --test storage
 sudo bash setup-k8s-lab.sh --test resource
 sudo bash setup-k8s-lab.sh --test canary
 sudo bash setup-k8s-lab.sh --test network
+sudo bash setup-k8s-lab.sh --test calico         # 独立集群测试
 
 # 环境检测
 sudo bash setup-k8s-lab.sh --check

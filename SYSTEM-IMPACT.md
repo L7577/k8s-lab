@@ -144,7 +144,8 @@ deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.
 {
   "registry-mirrors": [
     "https://mirror.ccs.tencentyun.com",
-    "https://docker.1ms.run"
+    "https://docker.1ms.run",
+    "https://docker.xuanyuan.me"
   ]
 }
 ```
@@ -579,7 +580,11 @@ sudo tee /etc/docker/daemon.json <<EOF
     "max-size": "10m",
     "max-file": "3"
   },
-  "registry-mirrors": ["https://mirror.ccs.tencentyun.com"]
+  "registry-mirrors": [
+    "https://mirror.ccs.tencentyun.com",
+    "https://docker.1ms.run",
+    "https://docker.xuanyuan.me"
+  ]
 }
 EOF
 sudo systemctl restart docker

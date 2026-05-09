@@ -6,9 +6,10 @@
 #
 # 功能:
 #   1. 创建多节点 Kind 集群
-#   2. 部署应用并验证
-#   3. 运行自愈/扩容/回滚测试
-#   4. 自动清理
+#   2. 预加载镜像到集群节点（解决无外网环境镜像拉取问题）
+#   3. 部署应用并验证
+#   4. 运行端口转发/扩容/自愈/回滚测试
+#   5. 自动清理
 #
 # 用法:
 #   ./local-ci.sh                   # 使用默认版本 (v1.31.2)
@@ -102,7 +103,7 @@ cleanup() {
 # ─── Step 1: 创建集群 ────────────────────────────────────────────────────
 step_create_cluster() {
     title
-    header "📦 Step 1/8: 创建多节点 Kind 集群 (${K8S_VERSION})"
+    header "📦 Step 1/9: 创建多节点 Kind 集群 (${K8S_VERSION})"
     echo ""
 
     # 使用 kind-cluster.yaml 配置（多节点），确保与真实环境一致
@@ -123,10 +124,35 @@ step_create_cluster() {
     ok "集群创建成功（1 控制平面 + 3 Worker）"
 }
 
-# ─── Step 2: 验证集群 ────────────────────────────────────────────────────
+# ─── Step 2: 预加载镜像到 Kind ─────────────────────────────────────────
+step_load_images() {
+    title
+    header "📥 Step 2/9: 预加载 Docker 镜像到 Kind 集群"
+    echo ""
+
+    # 定义 CI 流程需要的所有镜像（按优先顺序，本地有的优先）
+    local -a IMAGES=(
+        "nginx:alpine"
+        "nginx:1.27.5-alpine"
+    )
+
+    for img in "${IMAGES[@]}"; do
+        # 检查本地是否存在该镜像
+        if docker image inspect "$img" &>/dev/null; then
+            info "加载镜像: ${img}"
+            kind load docker-image "$img" --name "$CLUSTER_NAME" 2>&1
+        else
+            warn "本地镜像不存在: ${img}，跳过预加载（将尝试从远程拉取）"
+        fi
+    done
+
+    ok "镜像预加载完成"
+}
+
+# ─── Step 3: 验证集群 ────────────────────────────────────────────────────
 step_verify_cluster() {
     title
-    header "🔎 Step 2/8: 验证集群状态"
+    header "🔎 Step 3/9: 验证集群状态"
     echo ""
 
     kubectl cluster-info
@@ -135,39 +161,44 @@ step_verify_cluster() {
     kubectl get nodes -o wide
     echo ""
 
-    local NODE_COUNT
-    NODE_COUNT=$(kubectl get nodes --no-headers | wc -l)
-    if [ "$NODE_COUNT" -ge 2 ]; then
-        ok "集群正常，${NODE_COUNT} 个节点就绪"
-    else
-        error "集群异常，仅 ${NODE_COUNT} 个节点"
+    # 等待所有节点 Ready（CNI 安装需要时间）
+    info "等待所有节点就绪..."
+    if ! kubectl wait --for=condition=Ready node --all --timeout=120s 2>&1; then
+        error "节点未能在 120s 内就绪"
+        kubectl get nodes -o wide
         return 1
     fi
 
+    local NODE_COUNT
+    NODE_COUNT=$(kubectl get nodes --no-headers | wc -l)
+    ok "集群正常，${NODE_COUNT} 个节点就绪"
+
+    echo ""
     kubectl get pods -A
 }
 
-# ─── Step 3: 部署应用 ────────────────────────────────────────────────────
+# ─── Step 4: 部署应用 ────────────────────────────────────────────────────
 step_deploy_app() {
     title
-    header "📦 Step 3/8: 部署应用"
+    header "📦 Step 4/9: 部署应用"
     echo ""
 
     # 使用 deploy-example.yaml 统一部署（与文档一致）
     info "使用 deploy-example.yaml 部署 Deployment + Service..."
     kubectl apply -f deploy-example.yaml 2>&1
 
-    info "等待 Pod 就绪..."
-    kubectl wait --for=condition=ready pod -l app=nginx --timeout=120s
+    info "等待 Deployment 就绪..."
+    kubectl wait --for=condition=available deployment/nginx --timeout=120s
 
+    echo ""
     kubectl get pods -o wide
     ok "应用部署完成（3 副本）"
 }
 
-# ─── Step 4: 端口转发测试 ────────────────────────────────────────────────
+# ─── Step 5: 端口转发测试 ────────────────────────────────────────────────
 step_port_forward() {
     title
-    header "🌐 Step 4/8: 端口转发与服务访问测试"
+    header "🌐 Step 5/9: 端口转发与服务访问测试"
     echo ""
 
     kubectl port-forward service/nginx 8080:80 &
@@ -186,10 +217,10 @@ step_port_forward() {
     kill "$PF_PID" 2>/dev/null || true
 }
 
-# ─── Step 5: 扩容测试 ────────────────────────────────────────────────────
+# ─── Step 6: 扩容测试 ────────────────────────────────────────────────────
 step_scale() {
     title
-    header "📈 Step 5/8: 扩缩容测试"
+    header "📈 Step 6/9: 扩缩容测试"
     echo ""
 
     info "扩容到 5 副本..."
@@ -213,10 +244,10 @@ step_scale() {
     fi
 }
 
-# ─── Step 6: 自愈测试 ────────────────────────────────────────────────────
+# ─── Step 7: 自愈测试 ────────────────────────────────────────────────────
 step_self_heal() {
     title
-    header "🩹 Step 6/8: 自愈测试"
+    header "🩹 Step 7/9: 自愈测试"
     echo ""
 
     local POD_TO_DELETE
@@ -224,45 +255,41 @@ step_self_heal() {
     info "删除 Pod: ${POD_TO_DELETE}"
 
     kubectl delete "$POD_TO_DELETE" --wait=false
-    kubectl wait --for=condition=ready pod -l app=nginx --timeout=60s
+    kubectl wait --for=condition=available deployment/nginx --timeout=60s
     ok "自愈成功：新 Pod 已自动创建并就绪"
 
     echo ""
     info "批量删除所有 Pod 测试..."
-    kubectl delete pod -l app=nginx --all
-    kubectl wait --for=condition=ready pod -l app=nginx --timeout=60s
+    kubectl delete pod -l app=nginx
+    kubectl wait --for=condition=available deployment/nginx --timeout=60s
     ok "批量自愈成功"
 }
 
-# ─── Step 7: 回滚测试 ────────────────────────────────────────────────────
+# ─── Step 8: 回滚测试 ────────────────────────────────────────────────────
 step_rollback() {
     title
-    header "🔄 Step 7/8: 发布回滚测试"
+    header "🔄 Step 8/9: 发布回滚测试"
     echo ""
 
     # 记录初始版本
     kubectl annotate deployment/nginx kubernetes.io/change-cause="initial deploy nginx:alpine"
     sleep 2
 
-    # 模拟升级
-    info "模拟发布新版本..."
-    kubectl set image deployment/nginx nginx=nginx:1.26
-    kubectl annotate deployment/nginx kubernetes.io/change-cause="upgrade to nginx:1.26"
-    kubectl rollout status deployment/nginx --timeout=30s || true
-
-    # 模拟有问题的版本
-    info "模拟故障版本..."
-    kubectl set image deployment/nginx nginx=nginx:1.26-perl 2>&1 || true
-    sleep 3
+    # 使用本地已有的镜像版本进行升级模拟
+    local UPGRADE_IMAGE="nginx:1.27.5-alpine"
+    info "模拟发布新版本（使用本地镜像 ${UPGRADE_IMAGE}）..."
+    kubectl set image deployment/nginx "nginx=${UPGRADE_IMAGE}"
+    kubectl annotate deployment/nginx kubernetes.io/change-cause="upgrade to ${UPGRADE_IMAGE}"
+    kubectl rollout status deployment/nginx --timeout=60s
 
     # 查看历史
     echo ""
     header "回滚历史:"
     kubectl rollout history deployment/nginx
 
-    # 回滚
+    # 回滚到初始版本
     echo ""
-    info "回滚到初始版本..."
+    info "回滚到初始版本（nginx:alpine）..."
     kubectl rollout undo deployment/nginx --to-revision=1
     kubectl rollout status deployment/nginx --timeout=60s
 
@@ -273,8 +300,9 @@ step_rollback() {
     ok "回滚测试完成"
 }
 
-# ─── Step 8: 清理 ────────────────────────────────────────────────────────
+# ─── Step 9: 清理 ────────────────────────────────────────────────────────
 step_cleanup() {
+    echo ""
     if [ "$CLEANUP" = true ]; then
         cleanup
         echo ""
@@ -299,6 +327,7 @@ main() {
     preflight
     cleanup  # 确保环境干净
     step_create_cluster
+    step_load_images
     step_verify_cluster
     step_deploy_app
     step_port_forward

@@ -66,6 +66,8 @@ make quick            # 5 分钟快速实验
 | `make test-storage` | 存储测试 |
 | `make test-resource` | 资源限制测试 |
 | `make test-canary` | 金丝雀回滚测试 |
+| `make test-network` | 网络连通性测试 |
+| `make test-calico` | Calico CNI 测试（独立集群） |
 | `make ci` | 运行本地 CI 模拟（完整流水线） |
 | `make quick` | 5 分钟快速实验 |
 | `make clean` | 清理所有 Kind 集群 |

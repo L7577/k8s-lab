@@ -40,6 +40,7 @@ CLUSTER_CONFIG ?= kind-cluster.yaml
 
 .PHONY: help install cluster cluster-2node cluster-ha cluster-calico \
         test test-basic test-scale test-heal test-storage test-resource test-canary \
+        test-network test-calico \
         quick ci clean clean-all logs info
 
 # ─── 帮助 ──────────────────────────────────────────────────────────────────
@@ -69,6 +70,8 @@ help:
 	@echo -e "  $(CYAN)make test-storage$(NC)   - 存储测试"
 	@echo -e "  $(CYAN)make test-resource$(NC)  - 资源限制测试"
 	@echo -e "  $(CYAN)make test-canary$(NC)    - 金丝雀回滚测试"
+	@echo -e "  $(CYAN)make test-network$(NC)   - 网络连通性测试"
+	@echo -e "  $(CYAN)make test-calico$(NC)    - Calico CNI 测试（独立集群）"
 	@echo ""
 	@echo -e "$(BOLD)🚀 快速体验$(NC)"
 	@echo -e "  $(CYAN)make ci$(NC)             - 本地 CI 模拟"
@@ -164,6 +167,12 @@ test-resource: ensure_cluster
 
 test-canary: ensure_cluster
 	@bash setup-k8s-lab.sh --test canary
+
+test-network: ensure_cluster
+	@bash setup-k8s-lab.sh --test network
+
+test-calico:
+	@bash setup-k8s-lab.sh --test calico
 
 # ─── 快速实验 ──────────────────────────────────────────────────────────────
 quick:

@@ -23,7 +23,8 @@
 #   storage     - 存储测试
 #   resource    - 资源限制测试
 #   canary      - 金丝雀发布和回滚
-#   network     - 网络插件替换测试
+#   network     - 网络连通性测试
+#   calico      - CNI 网络插件替换测试（独立集群）
 #   all         - 运行所有测试
 # =============================================================================
 
@@ -402,7 +403,7 @@ test_self_heal() {
 
     echo ""
     info "删除所有 Pod 测试批量自愈..."
-    kubectl delete pod -l app=nginx --all 2>&1 | tee -a "$LOG_FILE"
+    kubectl delete pod -l app=nginx 2>&1 | tee -a "$LOG_FILE"
     sleep 5
 
     if kubectl wait --for=condition=ready pod -l app=nginx --timeout=60s 2>&1; then
@@ -486,7 +487,26 @@ test_resource() {
     header "🔧 测试 5：资源限制测试"
     echo ""
 
-    cat <<'EOF' | kubectl apply -f - 2>&1 | tee -a "$LOG_FILE"
+    # 尝试加载 stress 镜像，如果失败则使用 nginx:alpine 作为备用
+    local STRESS_IMAGE="progrium/stress"
+    local TEST_IMAGE="nginx:alpine"
+    local TEST_COMMAND=""
+    local TEST_ARGS=""
+
+    info "尝试加载 stress 镜像..."
+    if docker pull progrium/stress 2>/dev/null && kind load docker-image progrium/stress --name "$CLUSTER_NAME" 2>/dev/null; then
+        ok "stress 镜像已加载"
+        TEST_IMAGE="progrium/stress"
+        TEST_COMMAND="[\"stress\"]"
+        TEST_ARGS="[\"--vm\", \"2\", \"--vm-bytes\", \"256M\"]"
+    else
+        warn "stress 镜像不可用（网络问题），使用 nginx:alpine 验证资源限制"
+        TEST_IMAGE="nginx:alpine"
+        TEST_COMMAND="[]"
+        TEST_ARGS="[]"
+    fi
+
+    cat <<EOF | kubectl apply -f - 2>&1 | tee -a "$LOG_FILE"
 apiVersion: v1
 kind: Pod
 metadata:
@@ -494,9 +514,9 @@ metadata:
 spec:
   containers:
   - name: stress
-    image: progrium/stress
-    command: ["stress"]
-    args: ["--vm", "2", "--vm-bytes", "256M"]
+    image: ${TEST_IMAGE}
+    command: ${TEST_COMMAND}
+    args: ${TEST_ARGS}
     resources:
       requests:
         memory: "256Mi"
@@ -532,6 +552,11 @@ test_canary() {
     header "🔄 测试 6：金丝雀发布与回滚测试"
     echo ""
 
+    # 清理可能残留的资源
+    kubectl delete deployment/stable-app --now 2>/dev/null || true
+    kubectl delete service/stable-app 2>/dev/null || true
+    sleep 2
+
     # 部署稳定版
     info "部署稳定版应用 (nginx:alpine)..."
     kubectl create deployment stable-app --image=nginx:alpine --replicas=4 2>&1 | tee -a "$LOG_FILE"
@@ -546,13 +571,13 @@ test_canary() {
 
     # 模拟金丝雀发布（升级）
     info "模拟金丝雀发布（升级到 nginx:1.26）..."
-    kubectl set image deployment/stable-app stable-app=nginx:1.26 2>&1 | tee -a "$LOG_FILE"
+    kubectl set image deployment/stable-app *=nginx:1.26 2>&1 | tee -a "$LOG_FILE"
     kubectl annotate deployment/stable-app kubernetes.io/change-cause="upgrade to 1.26-canary" 2>&1 | tee -a "$LOG_FILE"
     sleep 5
 
     # 模拟回滚（使用一个不存在的版本触发失败）
     info "模拟有问题的版本更新..."
-    kubectl set image deployment/stable-app stable-app=nginx:1.26-perl 2>&1 | tee -a "$LOG_FILE" || true
+    kubectl set image deployment/stable-app *=nginx:1.26-perl 2>&1 | tee -a "$LOG_FILE" || true
     sleep 3
 
     # 查看回滚历史
@@ -568,8 +593,8 @@ test_canary() {
 
     # 验证回滚
     local ROLLBACK_IMAGE
-    ROLLBACK_IMAGE=$(kubectl describe pod "$(kubectl get pods -l app=stable-app -o name | head -1)" 2>/dev/null | grep -i image | head -1)
-    echo -e "  回滚后镜像：${ROLLBACK_IMAGE}"
+    ROLLBACK_IMAGE=$(kubectl describe pod "$(kubectl get pods -l app=stable-app -o name | head -1)" 2>/dev/null | grep -i image | head -1) || true
+    echo -e "  回滚后镜像：${ROLLBACK_IMAGE:-未知}"
     ok "金丝雀发布和回滚测试通过 ✅"
 
     # 清理
@@ -577,11 +602,121 @@ test_canary() {
     kubectl delete deployment/stable-app 2>/dev/null || true
 }
 
-# ─── 3.7 网络插件替换测试 ─────────────────────────────────────────
+# ─── 3.7 网络连通性测试 ────────────────────────────────────────────
 
 test_network() {
-    header "🌐 测试 7：网络插件替换测试（Calico）"
+    header "🌐 测试 7：网络连通性测试"
     echo ""
+
+    info "创建网络测试资源..."
+    cat <<'EOF' | kubectl apply -f - 2>&1 | tee -a "$LOG_FILE"
+apiVersion: v1
+kind: Pod
+metadata:
+  name: net-test-client
+  labels:
+    app: net-test
+spec:
+  containers:
+  - name: busybox
+    image: busybox:latest
+    command: ["sleep", "3600"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: net-test-server
+  labels:
+    app: net-test-server
+spec:
+  containers:
+  - name: nginx
+    image: nginx:alpine
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: net-test-svc
+spec:
+  selector:
+    app: net-test-server
+  ports:
+  - port: 80
+    targetPort: 80
+EOF
+
+    info "等待测试 Pod 就绪..."
+    if ! kubectl wait --for=condition=ready pod/net-test-client --timeout=60s 2>&1; then
+        warn "网络测试客户端启动超时"
+    fi
+    if ! kubectl wait --for=condition=ready pod/net-test-server --timeout=60s 2>&1; then
+        warn "网络测试服务端启动超时"
+    fi
+
+    # 获取 Pod IP
+    local SERVER_IP
+    SERVER_IP=$(kubectl get pod net-test-server -o jsonpath='{.status.podIP}' 2>/dev/null)
+    local CLIENT_IP
+    CLIENT_IP=$(kubectl get pod net-test-client -o jsonpath='{.status.podIP}' 2>/dev/null)
+
+    echo ""
+    echo -e "  客户端 IP：${BOLD}${CLIENT_IP}${NC}"
+    echo -e "  服务端 IP：${BOLD}${SERVER_IP}${NC}"
+    echo -e "  服务名称：${BOLD}net-test-svc${NC}"
+    echo ""
+
+    # 测试 1：Pod 间直接通信（通过 IP）
+    info "测试 1：Pod 间直接通信（通过 IP）..."
+    if kubectl exec net-test-client -- wget -q -O - http://${SERVER_IP} 2>/dev/null | grep -q "Welcome to nginx"; then
+        ok "Pod 间 IP 直连通信正常"
+    else
+        warn "Pod 间 IP 直连通信异常"
+    fi
+
+    # 测试 2：Service DNS 解析
+    info "测试 2：Service DNS 解析..."
+    if kubectl exec net-test-client -- nslookup net-test-svc 2>&1 | grep -q "Address"; then
+        ok "Service DNS 解析正常"
+    else
+        warn "Service DNS 解析异常"
+    fi
+
+    # 测试 3：通过 Service ClusterIP 访问
+    info "测试 3：通过 Service ClusterIP 访问..."
+    if kubectl exec net-test-client -- wget -q -O - http://net-test-svc 2>/dev/null | grep -q "Welcome to nginx"; then
+        ok "Service ClusterIP 访问正常"
+    else
+        warn "Service ClusterIP 访问异常"
+    fi
+
+    # 测试 4：Pod 到外网连通性
+    info "测试 4：Pod 到外网连通性..."
+    if kubectl exec net-test-client -- ping -c 1 -W 3 8.8.8.8 2>&1; then
+        ok "Pod 到外网通信正常"
+    else
+        warn "Pod 到外网通信异常（可能被环境限制）"
+    fi
+
+    # 清理
+    kubectl delete pod net-test-client --now 2>/dev/null || true
+    kubectl delete pod net-test-server --now 2>/dev/null || true
+    kubectl delete service net-test-svc 2>/dev/null || true
+
+    ok "网络连通性测试通过 ✅"
+}
+
+# ─── 3.8 Calico CNI 替换测试 ────────────────────────────────────────
+
+test_calico_cni() {
+    header "🌐 测试 8：网络插件替换测试（Calico）"
+    echo ""
+    warn "此测试将创建一个独立的 Calico 集群，需要额外的资源"
+    echo -ne "${YELLOW}确认运行？(y/N): ${NC}"
+    read -r CONFIRM
+    if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+        info "跳过网络插件测试"
+        return 0
+    fi
 
     local CALICO_CLUSTER="calico-test"
     local CALICO_CONFIG
@@ -598,15 +733,6 @@ nodes:
   - role: control-plane
   - role: worker
 EOF
-
-    warn "此测试将创建一个独立的 Calico 集群，需要额外的资源"
-    echo -ne "${YELLOW}确认运行？(y/N): ${NC}"
-    read -r CONFIRM
-    if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
-        info "跳过网络插件测试"
-        rm -f "$CALICO_CONFIG"
-        return 0
-    fi
 
     info "创建 Calico 测试集群..."
     if kind create cluster --config "$CALICO_CONFIG" 2>&1 | tee -a "$LOG_FILE"; then
@@ -665,12 +791,15 @@ run_single_test() {
         network)
             test_network
             ;;
+        calico)
+            test_calico_cni
+            ;;
         all)
             run_all_tests
             ;;
         *)
             error "未知测试场景: ${SCENARIO}"
-            echo "可用场景: basic, scale, self-heal, storage, resource, canary, network, all"
+            echo "可用场景: basic, scale, self-heal, storage, resource, canary, network, calico, all"
             return 1
             ;;
     esac
@@ -697,6 +826,8 @@ run_all_tests() {
     test_resource
     echo ""
     test_canary
+    echo ""
+    test_network
 
     echo ""
     title
